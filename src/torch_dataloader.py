@@ -27,7 +27,7 @@ class TorchDataset(Dataset):
         
         ## Image Parsing
         # abs path for image sample
-        img_path = Path(df.iloc[idx]["path"]).resolve()
+        img_path = Path(self.df.iloc[idx]["path"]).resolve()
         # Read image as numpy array
         img_array = io.imread(img_path)
 
@@ -38,7 +38,7 @@ class TorchDataset(Dataset):
         # A more optimal way to pad is perhaps possible
         boxes = np.zeros(shape=(20, 4))
         # Parse box string
-        boxes_obj = ast.literal_eval(df.iloc[idx]["annotations"])
+        boxes_obj = ast.literal_eval(self.df.iloc[idx]["annotations"])
         # Append as np.float32 array
         for i, box in enumerate(boxes_obj):
             box_as_list = np.array(list(box.values()))
