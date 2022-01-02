@@ -20,8 +20,17 @@ def plot_boxes(batch: torch.Tensor) -> torch.Tensor:
     return torch.Tensor(plotted)
 
 def show_batch(images: torch.Tensor, n: int=4):
-    """Visualize a batch of samples"""
+    """
+    Visualize a batch of samples
+    images: single batch of cv2 plotted images converted to tensor
+    n: number of images to batch and visualize, even number
+    """
+    
+    # Fix clipping my normalizing image values
+    images -= images.min()
+    images /= images.max()
+    # Visualize
     fig, ax = plt.subplots(figsize=(30, 30))
     ax.set_xticks([]); ax.set_yticks([])
-    grid = make_grid(images.permute(0, 3, 1, 2)[:n], nrow=2)
+    grid = make_grid(images.detach().permute(0, 3, 1, 2)[:n], nrow=2)
     ax.imshow(grid.permute(1, 2, 0))
