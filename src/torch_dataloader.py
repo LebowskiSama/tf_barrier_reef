@@ -1,10 +1,11 @@
 import pandas as pd
 import numpy as np
 import torch, torchvision
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from pathlib import Path
 from skimage import io
 import ast
+import typing
 
 class TorchDataset(Dataset):
 
@@ -69,13 +70,27 @@ class ToTensor(object):
             "boxes": torch.from_numpy(boxes)
         }
 
-def TorchDataLoader(path_to_df: str="../input/train_folds.csv", batch_size: int=4, shuffle: bool=False, pin_memory: bool=False, prefetch_factor: int=2) -> DataLoader:
+def make_train_val_loader(path_to_df: str="../input/train_folds.csv", batch_size: int=16, train_split: bool = 0.8, shuffle: bool=False, pin_memory: bool=False, prefetch_factor: int=2) -> typing.Tuple[DataLoader, DataLoader]:
     """Create and return the COTS Dataloader"""
     df = pd.read_csv(path_to_df)
     # Instantiate Dataset
     # dataset = TorchDataset(dataframe=df) # Vanilla Dataset
     transformed_dataset = TorchDataset(dataframe=df, transform = torchvision.transforms.Compose([ToTensor()]))
-    # Create dataloader
-    dataloader = DataLoader(transformed_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=pin_memory, prefectch_factor=prefetch_factor)
+    # Create vanilla dataloader
+    # dataloader = DataLoader(transformed_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=pin_memory, prefectch_factor=prefetch_factor)
+    
+    # Create Train Test Dataloader Split
+    train_split = train_split
+    dataset_size = len(transformed_dataset)
+    indices = list(range(dataset_size))
+    split = int(np.floor(train_split * dataset_size))
+    if shuffle:
+        np.random.seed(47)
+        np.random.shuffle(indices)
 
-    return dataloader
+    train_indices, val_indices = indices[:split], indices[split:]
+    
+    train_loader = DataLoader(transformed_dataset, batch_size=batch_size, sampler=SubsetRandomSampler(train_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+    val_loader = DataLoader(transformed_dataset, batch_size=batch_size, sampler=SubsetRandomSampler(val_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+
+    return train_loader, val_loader
