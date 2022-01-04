@@ -17,7 +17,7 @@ def plot_boxes(batch: torch.Tensor) -> torch.Tensor:
                 img = cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
         plotted.append(img)
 
-    return torch.Tensor(numpy.array(plotted))
+    return torch.Tensor(np.array(plotted))
 
 def show_batch(images: torch.Tensor, n: int=4):
     """
