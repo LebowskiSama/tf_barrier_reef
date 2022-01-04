@@ -17,7 +17,7 @@ def plot_boxes(batch: torch.Tensor) -> torch.Tensor:
                 img = cv2.rectangle(img, (x, y), (x + w, y + h), (0, 255, 0), 2)
         plotted.append(img)
 
-    return torch.Tensor(plotted)
+    return torch.Tensor(numpy.array(plotted))
 
 def show_batch(images: torch.Tensor, n: int=4):
     """
@@ -30,7 +30,7 @@ def show_batch(images: torch.Tensor, n: int=4):
     images -= images.min()
     images /= images.max()
     # Visualize
-    fig, ax = plt.subplots(figsize=(30, 30))
+    fig, ax = plt.subplots(figsize=(15, 15))
     ax.set_xticks([]); ax.set_yticks([])
     grid = make_grid(images.detach().permute(0, 3, 1, 2)[:n], nrow=2)
     ax.imshow(grid.permute(1, 2, 0))
