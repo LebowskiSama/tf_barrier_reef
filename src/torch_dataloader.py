@@ -2,7 +2,7 @@ from struct import pack
 import pandas as pd
 import numpy as np
 import torch, torchvision
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from torch.utils.data import DataLoader, Dataset, SequentialSampler
 
 from pathlib import Path
 from skimage import io
@@ -94,14 +94,11 @@ def custom_collate(batch):
     return [images, boxes]
 
 
-def make_train_val_loaders(path_to_df: str=Path("../input/train_folds.csv").resolve(), batch_size: int=16, train_split: bool = 0.8, shuffle: bool=False, pin_memory: bool=False, prefetch_factor: int=2) -> typing.Tuple[DataLoader, DataLoader]:
+def make_train_val_loaders(path_to_df: str=Path("../input/train_folds.csv").resolve(), batch_size: int=16, train_split: float = 0.8, shuffle: bool=False, pin_memory: bool=False, prefetch_factor: int=2) -> typing.Tuple[DataLoader, DataLoader]:
     """Create and return the COTS Dataloader"""
     df = pd.read_csv(path_to_df)
-    # Instantiate Dataset
-    # dataset = TorchDataset(dataframe=df) # Vanilla Dataset
+    
     transformed_dataset = TorchDataset(dataframe=df, transform = torchvision.transforms.Compose([ToYoloAnchors(), ToTensor()]))
-    # Create vanilla dataloader
-    # dataloader = DataLoader(transformed_dataset, batch_size=batch_size, shuffle=shuffle, pin_memory=pin_memory, prefectch_factor=prefetch_factor)
     
     # Create Train Test Dataloader Split
     train_split = train_split
@@ -114,8 +111,8 @@ def make_train_val_loaders(path_to_df: str=Path("../input/train_folds.csv").reso
 
     train_indices, val_indices = indices[:split], indices[split:]
     
-    train_loader = DataLoader(transformed_dataset, collate_fn=custom_collate, batch_size=batch_size, sampler=SubsetRandomSampler(train_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor)
-    val_loader = DataLoader(transformed_dataset, collate_fn=custom_collate, batch_size=batch_size, sampler=SubsetRandomSampler(val_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+    train_loader = DataLoader(transformed_dataset, collate_fn=custom_collate, batch_size=batch_size, sampler=SequentialSampler(train_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor, shuffle=shuffle)
+    val_loader = DataLoader(transformed_dataset, collate_fn=custom_collate, batch_size=batch_size, sampler=SequentialSampler(val_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor, shuffle=shuffle)
 
     return train_loader, val_loader
 
@@ -126,8 +123,7 @@ if __name__ == "__main__":
     # self, dataframe, anchors, image_size=416, S=[13, 26, 52], C=20, transform=None
     train_dl, _ = make_train_val_loaders()
     for idx, batch in enumerate(train_dl):
-        if idx == 3:
+        if idx == 2:
             images, boxes = batch
             print([box.shape for box in boxes])
-            
             break
