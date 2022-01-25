@@ -52,7 +52,7 @@ class TorchDataset(Dataset):
             box = list(box.values())
             boxes.append(np.array(box))
         
-        sample = (img_array, np.asarray(boxes))
+        sample = (img_array, np.asarray(boxes, dtype=np.float32))
 
         # Apply transforms as necessary
         if self.transform:
@@ -65,7 +65,6 @@ class TorchDataset(Dataset):
         return len(self.df)
 
 class ToTensor:
-
     def __call__(self, sample: torch.Tensor) -> torch.Tensor:
         """Permute image tensor dimensions to make them torch friendly"""
         image, boxes = sample  
@@ -75,14 +74,38 @@ class ToTensor:
         return torch.from_numpy(image), torch.from_numpy(boxes)
 
 class ToYoloAnchors():
+
+    def to_yolo(self, x, y, w, h, img_dim) -> np.array:
+        # Return normalized coordinates, yolo format
+        imh, imw = img_dim
+        x = x / imw
+        y = y / imh
+        w = w / imw
+        h = h / imh
+
+        return np.array([x, y, w, h], dtype=np.float32)
+        
+
     def __call__(self, sample: torch.Tensor) -> torch.Tensor:
         """Convert (x, y, w, h) anchors to Yolo Anchors"""
         image, boxes = sample
-        for box in boxes:
+        for idx, box in enumerate(boxes):
             if len(box) != 0:
                 x, y, w, h = box
-                box = BoundingBox.from_xywh((x, y), w, h)
-                box = box.to_yolo((720, 1280))
+                imw, imh = IMAGE_SIZE
+                try:
+                    assert(x < imw)
+                    assert(y < imh)
+                    assert(x + w < imw)
+                    assert(y + h < imh)
+                    # Convert to Yolo
+                    box = self.to_yolo(x, y, w, h, IMAGE_SIZE)
+                    # Replace in boxes
+                    boxes[idx] = box
+
+                except AssertionError:
+                    ## Implement Random Sampling
+                    pass
                 
         return image, boxes
         
@@ -123,7 +146,8 @@ if __name__ == "__main__":
     # self, dataframe, anchors, image_size=416, S=[13, 26, 52], C=20, transform=None
     train_dl, _ = make_train_val_loaders()
     for idx, batch in enumerate(train_dl):
-        if idx == 2:
+        print(idx)
+        if idx == 21:
             images, boxes = batch
-            print([box.shape for box in boxes])
+            print(boxes)
             break
