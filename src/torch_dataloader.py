@@ -11,7 +11,8 @@ import ast
 import typing
 from utils import (iou_width_height as iou, non_max_suppression as nms)
 
-from config import IMAGE_SIZE
+from config import IMAGE_SIZE, BATCH_SIZE
+
 
 class TorchDataset(Dataset):
 
@@ -50,9 +51,9 @@ class TorchDataset(Dataset):
         boxes = []
         for i, box in enumerate(boxes_obj):
             box = list(box.values())
-            boxes.append(np.array(box))
+            boxes.append(np.asarray(box))
         
-        sample = (img_array, np.asarray(boxes, dtype=np.float32))
+        sample = (img_array, np.asarray(boxes, dtype=np.float64))
 
         # Apply transforms as necessary
         if self.transform:
@@ -71,43 +72,47 @@ class ToTensor:
         # H x W x C -> C x H x W
         image = image.transpose((2, 0, 1))
         # Return transformed image and leave boxes untouched
-        return torch.from_numpy(image), torch.from_numpy(boxes)
+        return torch.from_numpy(image), torch.tensor(boxes, dtype=torch.float64)
 
 class ToYoloAnchors():
-
     def to_yolo(self, x, y, w, h, img_dim) -> np.array:
-        # Return normalized coordinates, yolo format
+        """Return normalized coordinates, yolo format"""
         imh, imw = img_dim
         x = x / imw
         y = y / imh
         w = w / imw
         h = h / imh
 
-        return np.array([x, y, w, h], dtype=np.float32)
-        
+        # 1 prepended to indicate presence of COTS
+        return np.array([1, x, y, w, h], dtype=np.float64)
+
 
     def __call__(self, sample: torch.Tensor) -> torch.Tensor:
         """Convert (x, y, w, h) anchors to Yolo Anchors"""
         image, boxes = sample
-        for idx, box in enumerate(boxes):
-            if len(box) != 0:
-                x, y, w, h = box
-                imw, imh = IMAGE_SIZE
-                try:
+        
+        # Check for presence of labels
+        if len(boxes) == 0:
+            return image, boxes
+        else:            
+            yolo_boxes = []
+            for box in boxes:
+                try:        
+                    x, y, w, h = box
+                    imw, imh = IMAGE_SIZE
                     assert(x < imw)
                     assert(y < imh)
                     assert(x + w < imw)
                     assert(y + h < imh)
                     # Convert to Yolo
                     box = self.to_yolo(x, y, w, h, IMAGE_SIZE)
-                    # Replace in boxes
-                    boxes[idx] = box
+                    yolo_boxes.append(box)
 
                 except AssertionError:
-                    ## Implement Random Sampling
+                    # Wrong labels
                     pass
-                
-        return image, boxes
+
+            return image, np.asarray(yolo_boxes, dtype=np.float64)
         
 
 def custom_collate(batch):
@@ -142,12 +147,18 @@ def make_train_val_loaders(path_to_df: str=Path("../input/train_folds.csv").reso
 
 # Sanity Check
 if __name__ == "__main__":
+
+    from pprint import pprint
+    
+    # Check for float64 precision retention
+    torch.set_printoptions(precision=8)
         
     # self, dataframe, anchors, image_size=416, S=[13, 26, 52], C=20, transform=None
     train_dl, _ = make_train_val_loaders()
     for idx, batch in enumerate(train_dl):
         print(idx)
-        if idx == 21:
+        if idx == 3:
+            
             images, boxes = batch
-            print(boxes)
+            pprint([box.shape for box in boxes])
             break
