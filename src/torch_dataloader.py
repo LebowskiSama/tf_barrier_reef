@@ -1,37 +1,62 @@
-from struct import pack
 import pandas as pd
 import numpy as np
-import torch, torchvision
+import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
-
+import albumentations as A
 from pathlib import Path
 from skimage import io
-from bbox_utils import BoundingBox
 import ast
 import typing
-from utils import (iou_width_height as iou, non_max_suppression as nms)
-
-from config import IMAGE_SIZE, BATCH_SIZE
+from utils import (iou_width_height as iou)
+import config
 
 
 class TorchDataset(Dataset):
 
     """Custom Torch Dataset"""
-    def __init__(self, dataframe, image_size=416, S=[13, 26, 52], transform=None):
+    def __init__(self, dataframe, anchors=config.ANCHORS, S=config.S, transforms=True):
         """
         Params: 
         `dataframe` of image path and annotations
         `transforms` where applicable
         """
         self.df = dataframe
-        self.transform = transform
-        # self.S = S
-        # self.ancchors = torch.tensor(anchors[0] + anchors[1] + anchors[2]) # All 3 scales
-        # self.num_anchors = self.anchors.shape[0]
-        # self.num_anchors_per_scale = self.num_anchors // 3
-        # self.C = C
-        # self.ignore_iou_thresh = 0.5
+        self.transform = transforms
+        # Grid Sizes
+        self.S = S
+        # All 3 scales put together
+        self.anchors = torch.tensor(anchors[0] + anchors[1] + anchors[2])
+        self.num_anchors = self.anchors.shape[0]
+        self.num_anchors_per_scale = self.num_anchors // 3
+        self.ignore_iou_thresh = 0.5
+        self.albumentations = A.Compose([
+            # A.LongestMaxSize(max_size=int(config.IMAGE_SIZE )),
+            # A.PadIfNeeded(
+            #     min_height=int(config.IMAGE_SIZE),
+            #     min_width=int(config.IMAGE_SIZE),
+            #     border_mode=cv2.BORDER_CONSTANT,
+            # ),
+            A.RandomCrop(width=config.IMAGE_SIZE, height=config.IMAGE_SIZE)
+        ], bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[],))
 
+    def to_yolo_boxes(self, box):
+        """Return normalized coordinates, yolo format"""
+        imh, imw = 720, 1280
+
+        x1, y1, w, h = box
+        x2 = x1 + w
+        y2 = y1 + h
+        xc = ((x2 + x1) / 2) / imw
+        yc = ((y2 + y1) / 2) / imh
+        w = w / imw
+        h = h / imh
+
+        assert(x1 < imw)
+        assert(x2 < imw)
+        assert(y1 < imh)
+        assert(y1 < imh)
+
+        return np.array([xc, yc, w, h], dtype=np.float64)
 
     def __getitem__(self, idx):
         """
@@ -40,125 +65,113 @@ class TorchDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
         
-        ## Image Parsing
-        # abs path for image sample
+        # Image Parsing
         img_path = Path(self.df.iloc[idx]["path"]).resolve()
-        # Read image as numpy array
-        img_array = io.imread(img_path)
+        image = io.imread(img_path)
 
-        # Parse box string
+        # Parse box
         boxes_obj = np.array(ast.literal_eval(self.df.iloc[idx]["annotations"]))
         boxes = []
-        for i, box in enumerate(boxes_obj):
+        for _, box in enumerate(boxes_obj):
             box = list(box.values())
-            boxes.append(np.asarray(box))
-        
-        sample = (img_array, np.asarray(boxes, dtype=np.float64))
+            boxes.append(self.to_yolo_boxes(box))
 
         # Apply transforms as necessary
         if self.transform:
-            sample = self.transform(sample)
+            transformed = self.albumentations(image=image, bboxes=boxes)
+            image = transformed['image']
+            boxes = transformed['bboxes']
 
-        return sample
+        # Yolo related ops to assign right anchors
+        # [p_o, x, y, w, h]
+        targets = [torch.zeros((self.num_anchors // 3, S, S, 5)) for S in self.S]
+        # print([target.shape for target in targets])
+
+        for box in boxes:
+            # Add presence of object
+            # np.insert(box, 0, 1, axis=0)
+            # Calculate iou score for each box with anchor to assign best anchor
+            iou_anchors = iou(torch.tensor(box[2:4]), self.anchors)
+            # Sort for best anchor
+            anchor_indices = iou_anchors.argsort(descending=True, dim=0)
+            x, y, width, height = box
+            has_anchor = [False, False, False]
+
+            for anchor_idx in anchor_indices:
+                # 0, 1, 2 for seeing which scale is best
+                scale_idx = anchor_idx // self.num_anchors_per_scale
+                # 0, 1, 2 depending on which scale we're going for
+                anchor_on_scale = anchor_idx % self.num_anchors_per_scale
+                # Choose the right scale
+                S = self.S[scale_idx]
+
+                # Assign bounding box to relative cell in grid
+                # suppose x = 0.5, S=13 -> int(6) = 6 almost the center of the image
+                i, j = int(S * y), int(S * x)
+                # Select the proper anchor to look at
+                anchor_taken = targets[scale_idx][anchor_on_scale, i, j, 0]
+
+                # Make sure the anchor isn't taken and there isn't also another anchor in the
+                # same scale for the same bounding box
+                if not anchor_taken and not has_anchor[scale_idx]:
+                    targets[scale_idx][anchor_on_scale, i, j, 0] = 1
+                    x_cell, y_cell = S * x - j, S * y - i
+                    w_cell, h_cell = width * S, height * S
+
+                    box_coordinates = torch.tensor([x_cell, y_cell, w_cell, h_cell])
+
+                    # Fill in targets
+                    # Class label
+                    # targets[scale_idx][anchor_on_scale, i, j, 0] = int(class_label)
+                    targets[scale_idx][anchor_on_scale, i, j, 1:5] = box_coordinates
+                    has_anchor[scale_idx] = True
+
+                # Ignore by thresh
+                elif not anchor_taken and iou_anchors[anchor_idx] > self.ignore_iou_thresh:
+                    targets[scale_idx][anchor_on_scale, i, j, 0] = -1 # -1 to indicate we ignore this prediction
+
+        return image, targets
 
     def __len__(self):
-        # Return total iterable dataset size
         return len(self.df)
 
-class ToTensor:
-    def __call__(self, sample: torch.Tensor) -> torch.Tensor:
-        """Permute image tensor dimensions to make them torch friendly"""
-        image, boxes = sample  
-        # H x W x C -> C x H x W
-        image = image.transpose((2, 0, 1))
-        # Return transformed image and leave boxes untouched
-        return torch.from_numpy(image), torch.tensor(boxes, dtype=torch.float64)
 
-class ToYoloAnchors():
-    def to_yolo(self, x, y, w, h, img_dim) -> np.array:
-        """Return normalized coordinates, yolo format"""
-        imh, imw = img_dim
-        x = x / imw
-        y = y / imh
-        w = w / imw
-        h = h / imh
-
-        # 1 prepended to indicate presence of COTS
-        return np.array([1, x, y, w, h], dtype=np.float64)
-
-
-    def __call__(self, sample: torch.Tensor) -> torch.Tensor:
-        """Convert (x, y, w, h) anchors to Yolo Anchors"""
-        image, boxes = sample
-        
-        # Check for presence of labels
-        if len(boxes) == 0:
-            return image, boxes
-        else:            
-            yolo_boxes = []
-            for box in boxes:
-                try:        
-                    x, y, w, h = box
-                    imw, imh = IMAGE_SIZE
-                    assert(x < imw)
-                    assert(y < imh)
-                    assert(x + w < imw)
-                    assert(y + h < imh)
-                    # Convert to Yolo
-                    box = self.to_yolo(x, y, w, h, IMAGE_SIZE)
-                    yolo_boxes.append(box)
-
-                except AssertionError:
-                    # Wrong labels
-                    pass
-
-            return image, np.asarray(yolo_boxes, dtype=np.float64)
-        
-
-def custom_collate(batch):
-    images = [item[0] for item in batch]
-    boxes = [item[1] for item in batch]
-
-    return [images, boxes]
-
-
-def make_train_val_loaders(path_to_df: str=Path("../input/train_folds.csv").resolve(), batch_size: int=16, train_split: float = 0.8, shuffle: bool=False, pin_memory: bool=False, prefetch_factor: int=2) -> typing.Tuple[DataLoader, DataLoader]:
+def make_train_val_loaders(path_to_df: str = Path("../input/train_folds.csv").resolve(), train_split: float = 0.8, shuffle: bool = False, **kwargs) -> typing.Tuple[DataLoader, DataLoader]:
     """Create and return the COTS Dataloader"""
     df = pd.read_csv(path_to_df)
     
-    transformed_dataset = TorchDataset(dataframe=df, transform = torchvision.transforms.Compose([ToYoloAnchors(), ToTensor()]))
+    # transformed_dataset = TorchDataset(dataframe=df, transform=torchvision.transforms.Compose([transform_train]))
+    transformed_dataset = TorchDataset(dataframe=df)
     
     # Create Train Test Dataloader Split
     train_split = train_split
     dataset_size = len(transformed_dataset)
     indices = list(range(dataset_size))
     split = int(np.floor(train_split * dataset_size))
+
     if shuffle:
         np.random.seed(47)
         np.random.shuffle(indices)
 
     train_indices, val_indices = indices[:split], indices[split:]
     
-    train_loader = DataLoader(transformed_dataset, collate_fn=custom_collate, batch_size=batch_size, sampler=SequentialSampler(train_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor, shuffle=shuffle)
-    val_loader = DataLoader(transformed_dataset, collate_fn=custom_collate, batch_size=batch_size, sampler=SequentialSampler(val_indices), pin_memory=pin_memory, prefetch_factor=prefetch_factor, shuffle=shuffle)
+    train_loader = DataLoader(transformed_dataset, sampler=SequentialSampler(train_indices), **kwargs)
+    val_loader = DataLoader(transformed_dataset, sampler=SequentialSampler(train_indices), **kwargs)
 
     return train_loader, val_loader
 
 
 # Sanity Check
 if __name__ == "__main__":
-
-    from pprint import pprint
     
     # Check for float64 precision retention
     torch.set_printoptions(precision=8)
         
     # self, dataframe, anchors, image_size=416, S=[13, 26, 52], C=20, transform=None
-    train_dl, _ = make_train_val_loaders()
+    train_dl, _ = make_train_val_loaders(batch_size=config.BATCH_SIZE, pin_memory=config.PIN_MEMORY,)
     for idx, batch in enumerate(train_dl):
         print(idx)
-        if idx == 3:
+        if idx == 100:
             
-            images, boxes = batch
-            pprint([box.shape for box in boxes])
+            images, targets = batch
             break
