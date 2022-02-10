@@ -47,7 +47,8 @@ train_transforms = A.Compose(
                 A.ShiftScaleRotate(
                     rotate_limit=20, p=0.5, border_mode=cv2.BORDER_CONSTANT
                 ),
-                A.IAAAffine(shear=15, p=0.5, mode="constant"),
+                # Throws wraning hence ignored, disabled
+                # A.IAAAffine(shear=15, p=0.5, mode="constant"),
             ],
             p=1.0,
         ),
@@ -60,7 +61,7 @@ train_transforms = A.Compose(
         A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255,),
         ToTensorV2(),
     ],
-    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[],),
+    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=None,),
 )
 
 test_transforms = A.Compose(
@@ -72,5 +73,5 @@ test_transforms = A.Compose(
         A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255,),
         ToTensorV2(),
     ],
-    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[]),
+    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=None),
 )
