@@ -3,7 +3,9 @@ import torch.nn as nn
 
 from utils import intersection_over_union
 
+
 class YOLOLoss(nn.Module):
+
     def __init__(self):
         super().__init__()
         # For box preds
@@ -23,7 +25,7 @@ class YOLOLoss(nn.Module):
 
         # No obj loss
         no_object_loss = self.bce(
-            (predictions[..., 0:1][noobj], target[..., 0:1][noobj])
+            (predictions[..., 0:1][noobj]), (target[..., 0:1][noobj])
         )
 
         # Object loss
@@ -31,7 +33,9 @@ class YOLOLoss(nn.Module):
         anchors = anchors.reshape(1, 3, 1, 1, 2) # Comes in as (3 x 2), reshaped to 1, 3, 1, 1, 2 for computations
         box_preds = torch.cat([self.sigmoid(predictions[..., 1:3]), torch.exp(predictions[..., 3:5]) * anchors], dim=-1)
         ious = intersection_over_union(box_preds[obj], target[..., 1:5][obj]).detach()
-        object_loss = self.bce((predictions[..., 0:1][obj], (ious * target[..., 0:1])))
+        object_loss = self.bce(
+            (predictions[..., 0:1][obj]), (ious * target[..., 0:1][obj])
+        )
 
         # Box coordinates loss
         predictions[..., 1:3] = self.sigmoid(predictions[..., 1:3])
