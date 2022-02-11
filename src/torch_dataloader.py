@@ -1,5 +1,7 @@
+import albumentations.pytorch.transforms
 import pandas as pd
 import numpy as np
+import cv2
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler
 import albumentations as A
@@ -9,10 +11,10 @@ import ast
 import typing
 from utils import (iou_width_height as iou)
 import config
+from bbox_utils import BoundingBox
 
 
 class TorchDataset(Dataset):
-
     """Custom Torch Dataset"""
     def __init__(self, dataframe, anchors=config.ANCHORS, S=config.S, transforms=True):
         """
@@ -30,33 +32,29 @@ class TorchDataset(Dataset):
         self.num_anchors_per_scale = self.num_anchors // 3
         self.ignore_iou_thresh = 0.5
         self.albumentations = A.Compose([
-            # A.LongestMaxSize(max_size=int(config.IMAGE_SIZE )),
-            # A.PadIfNeeded(
-            #     min_height=int(config.IMAGE_SIZE),
-            #     min_width=int(config.IMAGE_SIZE),
-            #     border_mode=cv2.BORDER_CONSTANT,
-            # ),
-            A.RandomCrop(width=config.IMAGE_SIZE, height=config.IMAGE_SIZE)
+            A.LongestMaxSize(max_size=int(config.IMAGE_SIZE)),
+            A.PadIfNeeded(
+                min_height=int(config.IMAGE_SIZE),
+                min_width=int(config.IMAGE_SIZE),
+                border_mode=cv2.BORDER_CONSTANT,
+            ),
+            A.HorizontalFlip(),
+            A.ToGray(p=0.1),
+            A.ChannelShuffle(p=0.05),
+            A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255),
+            albumentations.pytorch.transforms.ToTensorV2(),
         ], bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[],))
 
-    def to_yolo_boxes(self, box):
-        """Return normalized coordinates, yolo format"""
-        imh, imw = 720, 1280
-
+    @staticmethod
+    def albu_yolo(box):
         x1, y1, w, h = box
-        x2 = x1 + w
-        y2 = y1 + h
-        xc = ((x2 + x1) / 2) / imw
-        yc = ((y2 + y1) / 2) / imh
-        w = w / imw
-        h = h / imh
-
-        assert(x1 < imw)
-        assert(x2 < imw)
-        assert(y1 < imh)
-        assert(y1 < imh)
-
-        return np.array([xc, yc, w, h], dtype=np.float64)
+        x2, y2 = x1 + w, y1 + h
+        try:
+            bbox_albu = A.convert_bbox_to_albumentations((x1, y1, x2, y2), source_format="pascal_voc", rows=720, cols=1280)
+            bbox_yolo = A.convert_bbox_from_albumentations(bbox_albu, target_format="yolo", rows=720, cols=1280, check_validity=True)
+            return bbox_yolo
+        except:
+            return -1
 
     def __getitem__(self, idx):
         """
@@ -74,7 +72,11 @@ class TorchDataset(Dataset):
         boxes = []
         for _, box in enumerate(boxes_obj):
             box = list(box.values())
-            boxes.append(self.to_yolo_boxes(box))
+            yolo_box = (self.albu_yolo(box))
+            if type(yolo_box) == tuple:
+                boxes.append(yolo_box)
+            else:
+                continue
 
         # Apply transforms as necessary
         if self.transform:
@@ -99,7 +101,7 @@ class TorchDataset(Dataset):
 
             for anchor_idx in anchor_indices:
                 # 0, 1, 2 for seeing which scale is best
-                scale_idx = anchor_idx // self.num_anchors_per_scale
+                scale_idx = torch.div(anchor_idx, self.num_anchors_per_scale, rounding_mode="trunc")
                 # 0, 1, 2 depending on which scale we're going for
                 anchor_on_scale = anchor_idx % self.num_anchors_per_scale
                 # Choose the right scale
@@ -119,7 +121,7 @@ class TorchDataset(Dataset):
                     w_cell, h_cell = width * S, height * S
 
                     box_coordinates = torch.tensor([x_cell, y_cell, w_cell, h_cell])
-
+                    # print(box_coordinates)
                     # Fill in targets
                     # Class label
                     # targets[scale_idx][anchor_on_scale, i, j, 0] = int(class_label)
@@ -128,9 +130,10 @@ class TorchDataset(Dataset):
 
                 # Ignore by thresh
                 elif not anchor_taken and iou_anchors[anchor_idx] > self.ignore_iou_thresh:
-                    targets[scale_idx][anchor_on_scale, i, j, 0] = -1 # -1 to indicate we ignore this prediction
+                    # -1 to indicate we ignore this prediction
+                    targets[scale_idx][anchor_on_scale, i, j, 0] = -1
 
-        return image, targets
+        return image, tuple(targets)
 
     def __len__(self):
         return len(self.df)
@@ -162,16 +165,20 @@ def make_train_val_loaders(path_to_df: str = Path("../input/train_folds.csv").re
 
 
 # Sanity Check
-if __name__ == "__main__":
-    
-    # Check for float64 precision retention
-    torch.set_printoptions(precision=8)
-        
-    # self, dataframe, anchors, image_size=416, S=[13, 26, 52], C=20, transform=None
-    train_dl, _ = make_train_val_loaders(batch_size=config.BATCH_SIZE, pin_memory=config.PIN_MEMORY,)
-    for idx, batch in enumerate(train_dl):
-        print(idx)
-        if idx == 100:
-            
-            images, targets = batch
-            break
+# if __name__ == "__main__":
+#
+#     # Check for float64 precision retention
+#     torch.set_printoptions(precision=8)
+#
+#     # self, dataframe, anchors, image_size=416, S=[13, 26, 52], C=20, transform=None
+#     train_dl, _ = make_train_val_loaders(batch_size=config.BATCH_SIZE, pin_memory=config.PIN_MEMORY,)
+#     for idx, batch in enumerate(train_dl):
+#         print(idx)
+#         #
+#         images, targets = batch
+#         for target in targets:
+#             obj = target[..., 0] == 1
+#             print(target[..., 0:5][obj])
+#
+#         if idx == 300:
+#             break
