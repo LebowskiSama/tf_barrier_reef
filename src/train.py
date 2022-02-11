@@ -66,12 +66,12 @@ def main():
 
     scaled_anchors = (
         torch.tensor(config.ANCHORS)
-        * torch.tensor(config.S).unsqueeze(1).unsqueeze(2).repeat(1, 3, 2)
+        * torch.tensor(config.S).unsqueeze(1).unsqueeze(1).repeat(1, 3, 2)
 
     ).to(config.DEVICE)
 
     opt = torch.optim.Adam(
-        model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY,
+        model.parameters(), lr=config.LEARNING_RATE, weight_decay=config.WEIGHT_DECAY
     )
 
     for epoch in range(config.NUM_EPOCHS):
