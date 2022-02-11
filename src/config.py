@@ -15,13 +15,14 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_WORKERS = 4
 LEARNING_RATE = 2e-4
 WEIGHT_DECAY = 5e-4
-NUM_EPOCHS = 100
+EPS = 1e-6
+NUM_EPOCHS = 25
 CONF_THRESHOLD = 0.6
 MAP_IOU_THRESH = 0.5
 NMS_IOU_THRESH = 0.45
 S = [IMAGE_SIZE // 32, IMAGE_SIZE // 16, IMAGE_SIZE // 8]
 PIN_MEMORY = True
-CHECKPOINT_FILE = "checkpoint.pth.tar"
+CHK = "../models/my_checkpoint.pth.tar"
 
 # Anchors computed using K-means on MS COCO
 ANCHORS = [
@@ -61,7 +62,7 @@ train_transforms = A.Compose(
         A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255,),
         ToTensorV2(),
     ],
-    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=None,),
+    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[]),
 )
 
 test_transforms = A.Compose(
@@ -73,5 +74,5 @@ test_transforms = A.Compose(
         A.Normalize(mean=[0, 0, 0], std=[1, 1, 1], max_pixel_value=255,),
         ToTensorV2(),
     ],
-    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=None),
+    bbox_params=A.BboxParams(format="yolo", min_visibility=0.4, label_fields=[]),
 )
