@@ -9,6 +9,7 @@ import torch
 from collections import Counter
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+import config
 
 
 def iou_width_height(boxes1, boxes2):
@@ -28,50 +29,32 @@ def iou_width_height(boxes1, boxes2):
     return intersection / union
 
 
-def intersection_over_union(boxes_preds, boxes_labels, box_format="midpoint"):
-    """
-    Video explanation of this function:
-    https://youtu.be/XXYG5ZWtjj0
-    This function calculates intersection over union (iou) given pred boxes
-    and target boxes.
-    Parameters:
-        boxes_preds (tensor): Predictions of Bounding Boxes (BATCH_SIZE, 4)
-        boxes_labels (tensor): Correct labels of Bounding Boxes (BATCH_SIZE, 4)
-        box_format (str): midpoint/corners, if boxes (x,y,w,h) or (x1,y1,x2,y2)
-    Returns:
-        tensor: Intersection over union for all examples
-    """
+def int_over_union(box1, box2):
 
-    if box_format == "midpoint":
-        box1_x1 = boxes_preds[..., 0:1] - boxes_preds[..., 2:3] / 2
-        box1_y1 = boxes_preds[..., 1:2] - boxes_preds[..., 3:4] / 2
-        box1_x2 = boxes_preds[..., 0:1] + boxes_preds[..., 2:3] / 2
-        box1_y2 = boxes_preds[..., 1:2] + boxes_preds[..., 3:4] / 2
-        box2_x1 = boxes_labels[..., 0:1] - boxes_labels[..., 2:3] / 2
-        box2_y1 = boxes_labels[..., 1:2] - boxes_labels[..., 3:4] / 2
-        box2_x2 = boxes_labels[..., 0:1] + boxes_labels[..., 2:3] / 2
-        box2_y2 = boxes_labels[..., 1:2] + boxes_labels[..., 3:4] / 2
+    box1_x1 = box1[..., 0:1] - box1[..., 2:3] / 2
+    box1_y1 = box1[..., 1:2] - box1[..., 3:4] / 2
+    box1_x2 = box1[..., 0:1] + box1[..., 2:3] / 2
+    box1_y2 = box1[..., 1:2] + box1[..., 3:4] / 2
 
-    if box_format == "corners":
-        box1_x1 = boxes_preds[..., 0:1]
-        box1_y1 = boxes_preds[..., 1:2]
-        box1_x2 = boxes_preds[..., 2:3]
-        box1_y2 = boxes_preds[..., 3:4]
-        box2_x1 = boxes_labels[..., 0:1]
-        box2_y1 = boxes_labels[..., 1:2]
-        box2_x2 = boxes_labels[..., 2:3]
-        box2_y2 = boxes_labels[..., 3:4]
+    box2_x1 = box2[..., 0:1] - box2[..., 2:3] / 2
+    box2_y1 = box2[..., 1:2] - box2[..., 3:4] / 2
+    box2_x2 = box2[..., 0:1] + box2[..., 2:3] / 2
+    box2_y2 = box2[..., 1:2] + box2[..., 3:4] / 2
 
+    # Intersection
     x1 = torch.max(box1_x1, box2_x1)
     y1 = torch.max(box1_y1, box2_y1)
-    x2 = torch.min(box1_x2, box2_x2)
-    y2 = torch.min(box1_y2, box2_y2)
+    x2 = torch.max(box1_x2, box2_x2)
+    y2 = torch.max(box1_y2, box2_y2)
+    # clamp for edge case where there's no intersection
+    intersection = (x2 - x1).clamp(0) * (y2 - y1).clamp(0) + config.EPS
 
-    intersection = (x2 - x1).clamp(0) * (y2 - y1).clamp(0)
-    box1_area = abs((box1_x2 - box1_x1) * (box1_y2 - box1_y1))
-    box2_area = abs((box2_x2 - box2_x1) * (box2_y2 - box2_y1))
+    # Union
+    box1_area = abs((box1_x2 - box1_x1) * (box1_y1 - box1_y2))
+    box2_area = abs((box2_x2 - box2_x1) * (box2_y1 - box2_y2))
+    union = (box1_area + box2_area) - intersection + config.EPS
 
-    return intersection / (box1_area + box2_area - intersection + 1e-6)
+    return intersection / union
 
 
 def non_max_suppression(bboxes, iou_threshold, threshold, box_format="corners"):
@@ -102,10 +85,9 @@ def non_max_suppression(bboxes, iou_threshold, threshold, box_format="corners"):
             box
             for box in bboxes
             if box[0] != chosen_box[0]
-            or intersection_over_union(
+            or int_over_union(
                 torch.tensor(chosen_box[2:]),
                 torch.tensor(box[2:]),
-                box_format=box_format,
             )
             < iou_threshold
         ]
@@ -188,10 +170,9 @@ def mean_average_precision(
             best_iou = 0
 
             for idx, gt in enumerate(ground_truth_img):
-                iou = intersection_over_union(
+                iou = int_over_union(
                     torch.tensor(detection[3:]),
                     torch.tensor(gt[3:]),
-                    box_format=box_format,
                 )
 
                 if iou > best_iou:
@@ -412,7 +393,7 @@ def get_mean_std(loader):
     return mean, std
 
 
-def save_checkpoint(model, optimizer, filename="my_checkpoint.pth.tar"):
+def save_checkpoint(model, optimizer, filename=config.CHK):
     print("=> Saving checkpoint")
     checkpoint = {
         "state_dict": model.state_dict(),
@@ -421,7 +402,7 @@ def save_checkpoint(model, optimizer, filename="my_checkpoint.pth.tar"):
     torch.save(checkpoint, filename)
 
 
-def load_checkpoint(checkpoint_file, model, optimizer, lr):
+def load_checkpoint(model, optimizer, lr, checkpoint_file=config.CHK):
     print("=> Loading checkpoint")
     checkpoint = torch.load(checkpoint_file, map_location=config.DEVICE)
     model.load_state_dict(checkpoint["state_dict"])
